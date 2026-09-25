@@ -27,6 +27,7 @@ const sse = @import("gen_sse.zig");
 const model_mod = @import("model.zig");
 const tok_mod = @import("tokenizer.zig");
 const mage_flow = @import("mage_flow.zig");
+const lora_mod = @import("lora.zig");
 
 const Weights = model_mod.Weights;
 const S = mlx.mlx_stream;
@@ -458,6 +459,54 @@ pub const Dit = struct {
     blocks: []Block,
     norm_out: MfLinear,
     proj_out: MfLinear,
+
+    /// Attach the standard Qwen-Image diffusers LoRA keys to the DiT linears.
+    /// The key parser already strips transformer./diffusion_model. wrappers
+    /// and normalizes to_out.0 to to_out.
+    pub fn attachLora(self: *Dit, stack: *const lora_mod.Stack) u32 {
+        self.detachLora();
+        var matched: u32 = 0;
+        var refs: [lora_mod.MAX_LORAS]lora_mod.Ref = undefined;
+        var keybuf: [160]u8 = undefined;
+        const globals = .{
+            .{ "img_in", &self.img_in },
+            .{ "txt_in.in_layer", &self.txt_in },
+            .{ "txt_in.out_layer", &self.txt_out },
+            .{ "time_text_embed.timestep_embedder.linear_1", &self.t1 },
+            .{ "time_text_embed.timestep_embedder.linear_2", &self.t2 },
+            .{ "modulation.1", &self.modulation },
+            .{ "norm_out.linear", &self.norm_out },
+            .{ "proj_out", &self.proj_out },
+        };
+        inline for (globals) |m| {
+            const found = stack.findAll(m[0], &refs);
+            if (found.len > 0) {
+                m[1].setLoraRefs(found);
+                matched += @intCast(found.len);
+            }
+        }
+        for (self.blocks, 0..) |*b, i| {
+            const mods = .{
+                .{ "attn.to_q", &b.q }, .{ "attn.to_k", &b.k }, .{ "attn.to_v", &b.v },
+                .{ "attn.to_out", &b.o }, .{ "img_mlp.proj", &b.proj },
+                .{ "img_mlp.gate_layer", &b.gate }, .{ "img_mlp.out", &b.out },
+            };
+            inline for (mods) |m| {
+                const key = std.fmt.bufPrint(&keybuf, "transformer_blocks.{d}.{s}", .{ i, m[0] }) catch "";
+                const found = stack.findAll(key, &refs);
+                if (found.len > 0) {
+                    m[1].setLoraRefs(found);
+                    matched += @intCast(found.len);
+                }
+            }
+        }
+        return matched;
+    }
+
+    pub fn detachLora(self: *Dit) void {
+        inline for (.{ &self.img_in, &self.txt_in, &self.txt_out, &self.t1, &self.t2, &self.modulation, &self.norm_out, &self.proj_out }) |l| l.clearLoraRefs();
+        for (self.blocks) |*b| inline for (.{ &b.q, &b.k, &b.v, &b.o, &b.proj, &b.gate, &b.out }) |l| l.clearLoraRefs();
+    }
 
     pub fn load(io: std.Io, allocator: std.mem.Allocator, s: S, model_dir: []const u8, cfg: DitConfig, dtype: mlx.mlx_dtype) !Dit {
         const dir = try std.fmt.allocPrint(allocator, "{s}/transformer", .{model_dir});

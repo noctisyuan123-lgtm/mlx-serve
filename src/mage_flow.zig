@@ -27,6 +27,7 @@ const log = @import("log.zig");
 const stb = @import("stb");
 const qvis = @import("qwen_vision.zig");
 const sse = @import("gen_sse.zig");
+const lora_mod = @import("lora.zig");
 
 // ── Config ──────────────────────────────────────────────────────────────
 // Parsed from the released diffusers-style repo: transformer/config.json,
@@ -570,6 +571,10 @@ pub const MfLinear = struct {
     dtype: mlx.mlx_dtype,
     bits: u32 = 0,
     group_size: u32 = 0,
+    // Runtime LoRA references are non-owning. The engine's Stack owns the
+    // adapter arrays and outlives the attached linear layers.
+    lora_refs: [lora_mod.MAX_LORAS]lora_mod.Ref = undefined,
+    lora_count: u8 = 0,
 
     /// `in_features` is the module's input dim, known at every call site from
     /// `Config`; it is what makes the packed geometry solvable.
@@ -626,6 +631,16 @@ pub const MfLinear = struct {
             _ = mlx.mlx_array_free(self.scales);
             _ = mlx.mlx_array_free(self.biases);
         }
+        self.lora_count = 0;
+    }
+
+    pub fn setLoraRefs(self: *MfLinear, refs: []const lora_mod.Ref) void {
+        self.lora_count = @intCast(refs.len);
+        @memcpy(self.lora_refs[0..refs.len], refs);
+    }
+
+    pub fn clearLoraRefs(self: *MfLinear) void {
+        self.lora_count = 0;
     }
 
     /// x[.., in] @ W (+ bias). `bias` stays a caller-owned argument so this is a
@@ -635,24 +650,37 @@ pub const MfLinear = struct {
         // dense path keeps the exact arithmetic the bf16 fixtures were pinned on.
         const xc = try astype(x, self.dtype, s);
         defer _ = mlx.mlx_array_free(xc);
-        if (!self.quantized) return linearT(xc, self.w, bias, s);
-        if (try self.dqGemmWide(xc, bias, s)) |y| return y;
-        var o = mlx.mlx_array_new();
-        try mlx.check(mlx.mlx_quantized_matmul(
-            &o,
-            xc,
-            self.w,
-            self.scales,
-            self.biases,
-            true,
-            mlx.mlx_optional_int.some(@intCast(self.group_size)),
-            mlx.mlx_optional_int.some(@intCast(self.bits)),
-            "affine",
-            s,
-        ));
-        if (bias) |b| {
-            defer _ = mlx.mlx_array_free(o);
-            return addA(o, b, s);
+        var o: mlx.mlx_array = undefined;
+        if (!self.quantized) {
+            o = try linearT(xc, self.w, bias, s);
+        } else if (try self.dqGemmWide(xc, bias, s)) |wide| {
+            o = wide;
+        } else {
+            o = mlx.mlx_array_new();
+            try mlx.check(mlx.mlx_quantized_matmul(
+                &o,
+                xc,
+                self.w,
+                self.scales,
+                self.biases,
+                true,
+                mlx.mlx_optional_int.some(@intCast(self.group_size)),
+                mlx.mlx_optional_int.some(@intCast(self.bits)),
+                "affine",
+                s,
+            ));
+            if (bias) |b| {
+                const with_bias = try addA(o, b, s);
+                _ = mlx.mlx_array_free(o);
+                o = with_bias;
+            }
+        }
+        if (self.lora_count > 0) {
+            const d = try lora_mod.deltaSum(xc, self.lora_refs[0..self.lora_count], s);
+            defer _ = mlx.mlx_array_free(d);
+            const with_lora = try addA(o, d, s);
+            _ = mlx.mlx_array_free(o);
+            o = with_lora;
         }
         return o;
     }
