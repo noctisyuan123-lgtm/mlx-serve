@@ -116,8 +116,8 @@ struct EmptyStateChipRow: View {
                         CLILauncherMenuItems(
                             detector: cliDetector,
                             baseURL: server.baseURL,
-                            servedModelId: server.chatModelId ?? "mlx-serve",
-                            serverContextLength: server.chatModelInfo?.contextLength,
+                            servedModelId: appState.agentModelId ?? "mlx-serve",
+                            serverContextLength: appState.agentModelContextLength,
                             models: server.allModels,
                             openSandboxAgent: { appState.startTerminal(agentId: $0) },
                     openHostCLI: { appState.startTerminal(hostCLI: $0) })

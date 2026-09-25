@@ -1360,8 +1360,8 @@ struct ChatSidebar: View {
                 CLILauncherMenuItems(
                     detector: cliDetector,
                     baseURL: appState.server.baseURL,
-                    servedModelId: appState.server.chatModelId ?? "mlx-serve",
-                    serverContextLength: appState.server.chatModelInfo?.contextLength,
+                    servedModelId: appState.agentModelId ?? "mlx-serve",
+                    serverContextLength: appState.agentModelContextLength,
                     models: appState.server.allModels,
                     openSandboxAgent: { appState.startTerminal(agentId: $0) },
                     openHostCLI: { appState.startTerminal(hostCLI: $0) })

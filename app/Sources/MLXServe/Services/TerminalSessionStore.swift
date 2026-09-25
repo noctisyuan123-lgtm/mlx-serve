@@ -30,12 +30,18 @@ final class TerminalSessionStore: ObservableObject {
     private var hostSpecs: [UUID: LauncherCLI] = [:]
     private let server: ServerManager
     private let options: () -> ServerOptions
+    private let agentModelId: () -> String?
+    private let agentModelContextLength: () -> Int?
     private let sandbox = AgentSandbox.shared
     private var observers: [AnyCancellable] = []
 
-    init(server: ServerManager, options: @escaping () -> ServerOptions) {
+    init(server: ServerManager, options: @escaping () -> ServerOptions,
+         agentModelId: @escaping () -> String?,
+         agentModelContextLength: @escaping () -> Int?) {
         self.server = server
         self.options = options
+        self.agentModelId = agentModelId
+        self.agentModelContextLength = agentModelContextLength
         // Settings workspace pick under live sessions: the guest was already
         // torn down — restart every living session in the new guest.
         observers.append(NotificationCenter.default
@@ -117,10 +123,14 @@ final class TerminalSessionStore: ObservableObject {
                 sessions.markFailed(id, message: "the server isn't running — load a model first; \(cli.displayName) talks to it")
                 return
             }
-            let budget = AgentBudget.forServerContext(server.chatModelInfo?.contextLength)
+            guard let modelId = agentModelId() else {
+                sessions.markFailed(id, message: "no chat model is selected — choose one in Models before launching \(cli.displayName)")
+                return
+            }
+            let budget = AgentBudget.forServerContext(agentModelContextLength())
             warnIfSmallContext(agentId: cli.id, context: budget.context)
             let cmd = CLILauncher.launchCommand(
-                cli, baseURL: server.baseURL, servedModelId: server.chatModelId ?? "mlx-serve",
+                cli, baseURL: server.baseURL, servedModelId: modelId,
                 budget: budget,
                 entries: AgentModelEntry.chatEntries(from: server.allModels),
                 workingDirectory: workspace)
@@ -152,9 +162,9 @@ final class TerminalSessionStore: ObservableObject {
         // the same fallback the host launcher and the tray use. Requiring a
         // resolved id here refused sessions ("no model is loaded") on a
         // running server whose resident model had no chat id yet.
-        let model = server.chatModelId ?? "mlx-serve"
+        let model = agentModelId() ?? "mlx-serve"
         let port = server.port
-        let budget = AgentBudget.forServerContext(server.chatModelInfo?.contextLength)
+        let budget = AgentBudget.forServerContext(agentModelContextLength())
         let key = options().apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let entries = AgentModelEntry.chatEntries(from: server.allModels)
         Task {

@@ -609,8 +609,8 @@ struct StatusMenuView: View {
                 if BuildFeatures.current.cliLauncher {
                     CLILauncherButton(
                         baseURL: server.baseURL,
-                        servedModelId: server.chatModelId ?? "mlx-serve",
-                        serverContextLength: server.chatModelInfo?.contextLength,
+                        servedModelId: appState.agentModelId ?? "mlx-serve",
+                        serverContextLength: appState.agentModelContextLength,
                         models: server.allModels,
                         isEnabled: server.status == .running,
                         openSandboxAgent: { appState.startTerminal(agentId: $0) },
@@ -619,8 +619,8 @@ struct StatusMenuView: View {
                 } else {
                     CLISetupInstructionsButton(
                         baseURL: server.baseURL,
-                        servedModelId: server.chatModelId ?? "mlx-serve",
-                        serverContextLength: server.chatModelInfo?.contextLength,
+                        servedModelId: appState.agentModelId ?? "mlx-serve",
+                        serverContextLength: appState.agentModelContextLength,
                         isEnabled: server.status == .running
                     )
                 }
@@ -1349,4 +1349,3 @@ struct TerminalLogTextView: NSViewRepresentable {
         context.coordinator.lastAutoScroll = autoScroll
     }
 }
-

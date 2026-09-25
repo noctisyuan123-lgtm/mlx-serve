@@ -95,6 +95,21 @@ class AppState: ObservableObject {
         }
     }
 
+    /// A headless server has no resident chat model yet, but coding CLIs need
+    /// the selected model's real registry id (not the "mlx-serve" alias) so
+    /// their first request can load it on demand.
+    var agentModelId: String? {
+        if let id = server.chatModelId { return id }
+        guard let local = localModels.first(where: { $0.path == selectedModelPath && $0.isChatPickable }) else { return nil }
+        return server.allModels.first(where: { $0.name == local.name && $0.servesChat })?.name
+    }
+
+    var agentModelContextLength: Int? {
+        if let context = server.chatModelInfo?.contextLength { return context }
+        guard let id = agentModelId else { return nil }
+        return server.allModels.first(where: { $0.name == id })?.contextLength
+    }
+
     /// How `selectedModelPath`'s `didSet` makes the server serve the new pick.
     /// A RUNNING server is hot-switched in place via /v1/load-model — no
     /// restart. The id is the model's ABSOLUTE PATH, never the dir basename:
@@ -156,7 +171,9 @@ class AppState: ObservableObject {
     /// Sandbox terminals (pi / hermes / shell in the guest): rows of the
     /// Chats section, owned here so closing the chat window ends nothing.
     lazy var terminals = TerminalSessionStore(server: server,
-                                              options: { [unowned self] in self.serverOptions })
+                                              options: { [unowned self] in self.serverOptions },
+                                              agentModelId: { [unowned self] in self.agentModelId },
+                                              agentModelContextLength: { [unowned self] in self.agentModelContextLength })
     /// The sidebar's dragged order over conversations and terminals (ids in
     /// visual order). Empty = newest first. Persisted; terminals' ids drop out
     /// at quit like the terminals do.
