@@ -3,7 +3,8 @@ import SwiftUI
 import AppKit
 
 /// Drives neural text-to-speech (with zero-shot voice cloning) on the native
-/// mlx-serve server (Qwen3-TTS). Mirrors `ImageGenService` / `VideoGenService`:
+/// mlx-serve server (Qwen3-TTS), or the local BF16 Breeze MLX runtime.
+/// Mirrors `ImageGenService` / `VideoGenService`:
 /// same `Phase` lifecycle, same JSON-event stream, writes a `.wav` under
 /// `~/.mlx-serve/generations/audio`.
 ///
@@ -45,6 +46,11 @@ final class AudioGenService: ObservableObject {
         }
         guard request.lanModelId != nil || ServerManager.resolveModelDir(repo: request.model.repo) != nil else {
             phase = .failed("Model \(request.model.repo) is not downloaded. Download it first.")
+            return
+        }
+
+        if request.model.isBreezeTTS {
+            generateBreeze(request)
             return
         }
 
@@ -138,6 +144,33 @@ final class AudioGenService: ObservableObject {
             throw MediaGenError.notDownloaded(request.model.name)
         }
 
+        if request.model.isBreezeTTS {
+            guard let modelDir = ServerManager.resolveModelDir(repo: request.model.repo) else {
+                throw MediaGenError.notDownloaded(request.model.name)
+            }
+            let outputPath = Self.makeOutputPath(text: request.text)
+            let startedAt = Date()
+            onProgress?(MediaGenProgress(kind: .speech, step: 0, total: 0,
+                                         message: "Loading Breeze-TTS 2 BF16", startedAt: startedAt))
+            try await BreezeTTSBridge.synthesize(
+                modelPath: modelDir, text: request.text, refAudioPath: request.refAudioPath,
+                refText: request.refText, speed: request.speed, temperature: request.temperature,
+                outputPath: outputPath,
+                onProgress: { step, total, stage in
+                    let message = Self.breezeProgressMessage(step: step, total: total, stage: stage)
+                    DispatchQueue.main.async {
+                        onProgress?(MediaGenProgress(kind: .speech, step: step, total: total,
+                                                     message: message, startedAt: startedAt))
+                    }
+                })
+            onProgress?(MediaGenProgress(kind: .speech, step: 1, total: 1,
+                                         message: "Breeze-TTS 2 complete", startedAt: startedAt))
+            try? Self.settingsText(request, modelName: request.model.name)
+                .write(to: URL(fileURLWithPath: Self.sidecarPath(forWav: outputPath)),
+                       atomically: true, encoding: .utf8)
+            return outputPath
+        }
+
         let outputPath = Self.makeOutputPath(text: request.text)
         let keep = request.keepResident
         let startedAt = Date()
@@ -198,6 +231,56 @@ final class AudioGenService: ObservableObject {
     func cancel() {
         task?.cancel()
         task = nil
+    }
+
+    private func generateBreeze(_ request: AudioGenRequest) {
+        guard let modelDir = ServerManager.resolveModelDir(repo: request.model.repo) else {
+            phase = .failed("Breeze-TTS 2 BF16 is not available on this Mac.")
+            return
+        }
+        task?.cancel()
+        phase = .running(step: 0, total: 0, message: "Loading Breeze-TTS 2 BF16…")
+        log = []
+        let outputPath = Self.makeOutputPath(text: request.text)
+        task = Task {
+            do {
+                try await BreezeTTSBridge.synthesize(
+                    modelPath: modelDir, text: request.text, refAudioPath: request.refAudioPath,
+                    refText: request.refText, speed: request.speed, temperature: request.temperature,
+                    outputPath: outputPath,
+                    onProgress: { step, total, stage in
+                        let message = Self.breezeProgressMessage(step: step, total: total, stage: stage)
+                        DispatchQueue.main.async {
+                            // Cancellation tears the bridge process down, so a late
+                            // callback can outlive the phase it belongs to — only a
+                            // still-running generation may move the meter.
+                            if case .running = self.phase {
+                                self.phase = .running(step: step, total: total, message: message)
+                            }
+                        }
+                    })
+                if Task.isCancelled { phase = .idle; return }
+                try? Self.settingsText(request, modelName: request.model.name)
+                    .write(to: URL(fileURLWithPath: Self.sidecarPath(forWav: outputPath)),
+                           atomically: true, encoding: .utf8)
+                phase = .completed(path: outputPath)
+                insertRecent(outputPath)
+            } catch is CancellationError {
+                phase = .idle
+            } catch {
+                phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Bridge progress → the same "Rendering audio — ~X.Xs of audio" line the
+    /// native speech path shows. The bridge counts 1920-sample frames at 24 kHz
+    /// precisely so this conversion matches the engine's talker-frame step.
+    private static func breezeProgressMessage(step: Int, total: Int, stage: String) -> String {
+        let secs = Double(step) * 1920.0 / 24000.0
+        return total == 0 && step > 0
+            ? String(format: "%@ — ~%.1fs of audio", MediaSSE.stageLabel(stage), secs)
+            : MediaSSE.stageLabel(stage)
     }
 
     // MARK: - Private

@@ -399,9 +399,12 @@ struct VoiceGenView: View {
 
             if refAudioURL != nil {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Transcript of reference (optional)").font(.caption)
+                    Text(model.isBreezeTTS ? "Transcript of reference (required for Breeze)" : "Transcript of reference (optional)")
+                        .font(.caption)
                     TextField("", text: $refText,
-                              prompt: Text("Optional — the reference audio alone clones the voice"))
+                              prompt: Text(model.isBreezeTTS
+                                           ? "Enter the words spoken in the reference clip"
+                                           : "Optional — the reference audio alone clones the voice"))
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
                 }
@@ -442,17 +445,24 @@ struct VoiceGenView: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Speed (\(String(format: "%.2fx", speed)))").font(.caption)
+                Text(model.isBreezeTTS ? "Speed (fixed at 1x for Breeze)" : "Speed (\(String(format: "%.2fx", speed)))")
+                    .font(.caption)
                 Slider(value: $speed, in: 0.5...2.0, step: 0.05)
+                    .disabled(model.isBreezeTTS)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Temperature (\(String(format: "%.2f", temperature)))").font(.caption)
                 Slider(value: $temperature, in: 0.1...1.5, step: 0.05)
                 Text("Higher = more expressive and varied.").font(.caption2).foregroundStyle(.secondary)
             }
-            Toggle("Keep model loaded after generating", isOn: $keepResident)
-                .font(.caption)
-                .help("On: the model stays resident so the next generation is instant. Off (default): it's unloaded to free GPU memory.")
+            if model.isBreezeTTS {
+                Text("Breeze loads from the local MLX environment for each generation.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Toggle("Keep model loaded after generating", isOn: $keepResident)
+                    .font(.caption)
+                    .help("On: the model stays resident so the next generation is instant. Off (default): it's unloaded to free GPU memory.")
+            }
         }
     }
 
@@ -650,12 +660,18 @@ struct VoiceGenView: View {
 
     private func tryGenerate() {
         stopDictation() // the open mic would pick up the played result
+        if model.isBreezeTTS && refAudioURL != nil &&
+            refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            refError = "Breeze voice cloning needs the words spoken in the reference clip."
+            return
+        }
+        refError = nil
         let req = AudioGenRequest(
             model: model,
             text: text,
             refAudioPath: refAudioURL?.path,
             refText: refText,
-            speed: speed,
+            speed: model.isBreezeTTS ? 1.0 : speed,
             temperature: temperature,
             keepResident: keepResident,
             lanModelId: lanModel

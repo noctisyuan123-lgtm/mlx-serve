@@ -1182,8 +1182,20 @@ struct AudioModelPreset: Identifiable, Hashable {
     /// selection BLENDS them server-side.
     var builtInVoices: [String] = []
 
+    var isBreezeTTS: Bool { id == Self.breezeTTS2BF16.id }
+
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    static let breezeTTS2BF16 = AudioModelPreset(
+        id: "mlx-community/Breeze-TTS-2-mlx",
+        name: "Breeze-TTS 2 BF16 (Chinese voice cloning, ~7 GB)",
+        repo: "mlx-community/Breeze-TTS-2-mlx",
+        approxDownloadGB: 7.0,
+        approxRAMGB: 12,
+        recommendedRefSeconds: 8,
+        description: "Full-precision Breeze-TTS 2. Reference voice cloning requires a matching transcript."
+    )
 
     /// Qwen3-TTS 0.6B (Base) 8-bit — the lightest supported model. Default.
     /// Affine 8-bit talker + code predictor; the codec decoder and speaker
@@ -1278,7 +1290,7 @@ struct AudioModelPreset: Identifiable, Hashable {
     /// AudioGenService's `ref_audio` both assume it, and Kokoro answers
     /// `ref_audio` with a named 400. Keeping Kokoro out makes that impossible
     /// BY CONSTRUCTION rather than by list ordering.
-    static let all: [AudioModelPreset] = [.qwen3TTS06B8bit, .qwen3TTS06B, .qwen3TTS17B8bit, .qwen3TTS17B]
+    static let all: [AudioModelPreset] = [.qwen3TTS06B8bit, .breezeTTS2BF16, .qwen3TTS06B, .qwen3TTS17B8bit, .qwen3TTS17B]
 
     /// Every audio preset including voice-mode-only backends — for the model
     /// browser and the catalogue guards, never for a media pane's picker.

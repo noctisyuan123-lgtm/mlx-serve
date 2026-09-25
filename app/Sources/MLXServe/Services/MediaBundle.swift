@@ -146,6 +146,27 @@ extension MediaBundle {
         )
     }
 
+    /// Breeze's BF16 checkpoint is sharded and keeps its codec under
+    /// `audio_tokenizer/`, so all three weight files must be present.
+    static func breezeTTSBF16(repo: String, displayName: String, sizeGB: Double) -> MediaBundle {
+        MediaBundle(
+            id: "breeze-tts-bf16:\(repo)",
+            displayName: displayName,
+            components: [
+                MediaComponent(
+                    repo: repo,
+                    selection: FileSelection(recursive: true),
+                    readyMarkers: [
+                        "config.json", "tokenizer.json", "model.safetensors.index.json",
+                        "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors",
+                        "audio_tokenizer/config.json", "audio_tokenizer/model.safetensors",
+                    ]
+                ),
+            ],
+            sizeEstimateGB: sizeGB
+        )
+    }
+
     /// Kokoro: top-level weights + the `g2p/` dictionary subdir, so the download
     /// must be RECURSIVE.
     ///
@@ -515,7 +536,10 @@ extension AudioModelPreset {
     /// this dispatches instead of assuming Qwen3-TTS. `supportsCloning` is the
     /// discriminator the preset already declares.
     var bundle: MediaBundle {
-        supportsCloning
+        if isBreezeTTS {
+            return .breezeTTSBF16(repo: repo, displayName: name, sizeGB: approxDownloadGB)
+        }
+        return supportsCloning
             ? .tts(repo: repo, displayName: name, sizeGB: approxDownloadGB)
             : .kokoro(repo: repo, displayName: name, sizeGB: approxDownloadGB)
     }
