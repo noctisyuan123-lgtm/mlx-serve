@@ -1189,12 +1189,12 @@ struct AudioModelPreset: Identifiable, Hashable {
 
     static let breezeTTS2BF16 = AudioModelPreset(
         id: "mlx-community/Breeze-TTS-2-mlx",
-        name: "Breeze-TTS 2 BF16 (Chinese voice cloning, ~7 GB)",
+        name: "Breeze-TTS 2 BF16 (multilingual voice cloning, ~7 GB)",
         repo: "mlx-community/Breeze-TTS-2-mlx",
         approxDownloadGB: 7.0,
         approxRAMGB: 12,
         recommendedRefSeconds: 8,
-        description: "Full-precision Breeze-TTS 2. Reference voice cloning requires a matching transcript."
+        description: "Full-precision Breeze-TTS 2. Multilingual voice cloning that stays stable on both short and long text. Reference cloning requires a matching transcript."
     )
 
     /// Qwen3-TTS 0.6B (Base) 8-bit — the lightest supported model. Default.
