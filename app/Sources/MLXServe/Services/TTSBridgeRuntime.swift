@@ -105,6 +105,20 @@ enum TTSBridgeRuntime {
         let run = ProcessRun()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+                // Resume-exactly-once: the dispatch block, the cancel path and
+                // the watchdog all race for this continuation — a missing or
+                // doubled resume strands the caller's Task forever (observed as
+                // a meter frozen at 100% with the process already gone), which
+                // is worse than any error we could report.
+                let once = ResumeOnce(continuation)
+                // Watchdog: a bridge that neither finishes nor dies (wedge in
+                // interpreter teardown, stuck native call) gets killed and
+                // failed at 10 minutes — well past multi-minute loads and
+                // long multi-segment clips, so it never fires on real work.
+                DispatchQueue.global().asyncAfter(deadline: .now() + 600) {
+                    once.resume(.failure(failure(label, "\(label) generation timed out after 10 minutes.")))
+                    run.cancel()
+                }
                 DispatchQueue.global(qos: .userInitiated).async {
                     do {
                         let process = Process()
@@ -141,14 +155,34 @@ enum TTSBridgeRuntime {
                               size > 44 else {
                             throw failure(label, "The bridge returned no WAV file.")
                         }
-                        continuation.resume()
+                        once.resume(.success(()))
                     } catch {
-                        continuation.resume(throwing: error)
+                        once.resume(.failure(error))
                     }
                 }
             }
         } onCancel: {
             run.cancel()
+        }
+    }
+
+    /// Wraps a continuation so it can only ever be resumed once, from any of
+    /// the racing paths above.
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fired = false
+        private let continuation: CheckedContinuation<Void, Error>
+
+        init(_ continuation: CheckedContinuation<Void, Error>) {
+            self.continuation = continuation
+        }
+
+        func resume(_ result: Result<Void, Error>) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !fired else { return }
+            fired = true
+            continuation.resume(with: result)
         }
     }
 }

@@ -266,6 +266,10 @@ final class AudioGenService: ObservableObject {
     func cancel() {
         task?.cancel()
         task = nil
+        // Give the meter back immediately: the bridge's Task may still be
+        // unwinding (process teardown, cancellation race), and the button
+        // must not stay "Cancel" while the user waits for that.
+        if case .running = phase { phase = .idle }
     }
 
     private func generateBreeze(_ request: AudioGenRequest) {
