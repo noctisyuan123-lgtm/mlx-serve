@@ -53,6 +53,14 @@ final class AudioGenService: ObservableObject {
             generateBreeze(request)
             return
         }
+        if request.model.isIndexTTS {
+            generateIndexTTS(request)
+            return
+        }
+        if request.model.isDotsTTS {
+            generateDotsTTS(request)
+            return
+        }
 
         task?.cancel()
         phase = .running(step: 0, total: 3, message: "Loading model…")
@@ -144,27 +152,54 @@ final class AudioGenService: ObservableObject {
             throw MediaGenError.notDownloaded(request.model.name)
         }
 
-        if request.model.isBreezeTTS {
+        if request.model.isBreezeTTS || request.model.isIndexTTS || request.model.isDotsTTS {
             guard let modelDir = ServerManager.resolveModelDir(repo: request.model.repo) else {
                 throw MediaGenError.notDownloaded(request.model.name)
+            }
+            let modelTitle: String
+            if request.model.isBreezeTTS {
+                modelTitle = "Breeze-TTS 2 BF16"
+            } else if request.model.isIndexTTS {
+                modelTitle = "IndexTTS 2.5"
+            } else {
+                modelTitle = "dots.tts"
             }
             let outputPath = Self.makeOutputPath(text: request.text)
             let startedAt = Date()
             onProgress?(MediaGenProgress(kind: .speech, step: 0, total: 0,
-                                         message: "Loading Breeze-TTS 2 BF16", startedAt: startedAt))
-            try await BreezeTTSBridge.synthesize(
-                modelPath: modelDir, text: request.text, refAudioPath: request.refAudioPath,
-                refText: request.refText, speed: request.speed, temperature: request.temperature,
-                outputPath: outputPath,
-                onProgress: { step, total, stage in
-                    let message = Self.breezeProgressMessage(step: step, total: total, stage: stage)
-                    DispatchQueue.main.async {
-                        onProgress?(MediaGenProgress(kind: .speech, step: step, total: total,
-                                                     message: message, startedAt: startedAt))
-                    }
-                })
+                                         message: "Loading \(modelTitle)", startedAt: startedAt))
+            let bridge: (String, @escaping (Int, Int, String) -> Void) async throws -> Void
+            if request.model.isBreezeTTS {
+                bridge = { output, onBridgeProgress in
+                    try await BreezeTTSBridge.synthesize(
+                        modelPath: modelDir, text: request.text, refAudioPath: request.refAudioPath,
+                        refText: request.refText, speed: request.speed, temperature: request.temperature,
+                        outputPath: output, onProgress: onBridgeProgress)
+                }
+            } else if request.model.isIndexTTS {
+                bridge = { output, onBridgeProgress in
+                    try await IndexTTSBridge.synthesize(
+                        modelPath: modelDir, text: request.text, refAudioPath: request.refAudioPath,
+                        refText: request.refText, speed: request.speed, temperature: request.temperature,
+                        outputPath: output, onProgress: onBridgeProgress)
+                }
+            } else {
+                bridge = { output, onBridgeProgress in
+                    try await DotsTTSBridge.synthesize(
+                        modelPath: modelDir, text: request.text, refAudioPath: request.refAudioPath,
+                        refText: request.refText, speed: request.speed, temperature: request.temperature,
+                        outputPath: output, onProgress: onBridgeProgress)
+                }
+            }
+            try await bridge(outputPath) { step, total, stage in
+                let message = Self.bridgeProgressMessage(step: step, total: total, stage: stage)
+                DispatchQueue.main.async {
+                    onProgress?(MediaGenProgress(kind: .speech, step: step, total: total,
+                                                 message: message, startedAt: startedAt))
+                }
+            }
             onProgress?(MediaGenProgress(kind: .speech, step: 1, total: 1,
-                                         message: "Breeze-TTS 2 complete", startedAt: startedAt))
+                                         message: "\(modelTitle) complete", startedAt: startedAt))
             try? Self.settingsText(request, modelName: request.model.name)
                 .write(to: URL(fileURLWithPath: Self.sidecarPath(forWav: outputPath)),
                        atomically: true, encoding: .utf8)
@@ -249,7 +284,7 @@ final class AudioGenService: ObservableObject {
                     refText: request.refText, speed: request.speed, temperature: request.temperature,
                     outputPath: outputPath,
                     onProgress: { step, total, stage in
-                        let message = Self.breezeProgressMessage(step: step, total: total, stage: stage)
+                        let message = Self.bridgeProgressMessage(step: step, total: total, stage: stage)
                         DispatchQueue.main.async {
                             // Cancellation tears the bridge process down, so a late
                             // callback can outlive the phase it belongs to — only a
@@ -273,10 +308,97 @@ final class AudioGenService: ObservableObject {
         }
     }
 
+    /// IndexTTS 2.5 through its own bridge: same lifecycle as `generateBreeze`,
+    /// but the reference clip is REQUIRED (zero-shot conditioning) and speed is
+    /// real — the runtime time-stretches the waveform server-side.
+    private func generateIndexTTS(_ request: AudioGenRequest) {
+        guard let modelDir = ServerManager.resolveModelDir(repo: request.model.repo) else {
+            phase = .failed("IndexTTS 2.5 is not available on this Mac.")
+            return
+        }
+        guard let refAudio = request.refAudioPath, !refAudio.isEmpty else {
+            phase = .failed("IndexTTS 2.5 needs a reference voice clip — record or pick one first.")
+            return
+        }
+        task?.cancel()
+        phase = .running(step: 0, total: 0, message: "Loading IndexTTS 2.5…")
+        log = []
+        let outputPath = Self.makeOutputPath(text: request.text)
+        task = Task {
+            do {
+                try await IndexTTSBridge.synthesize(
+                    modelPath: modelDir, text: request.text, refAudioPath: refAudio,
+                    refText: request.refText, speed: request.speed, temperature: request.temperature,
+                    outputPath: outputPath,
+                    onProgress: { step, total, stage in
+                        let message = Self.bridgeProgressMessage(step: step, total: total, stage: stage)
+                        DispatchQueue.main.async {
+                            if case .running = self.phase {
+                                self.phase = .running(step: step, total: total, message: message)
+                            }
+                        }
+                    })
+            } catch is CancellationError {
+                phase = .idle
+            } catch {
+                phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// dots.tts through its own bridge: same lifecycle as the other local
+    /// bridges, but BOTH the reference clip and its transcript are required
+    /// (in-context cloning) and speed is fixed at 1x.
+    private func generateDotsTTS(_ request: AudioGenRequest) {
+        guard let modelDir = ServerManager.resolveModelDir(repo: request.model.repo) else {
+            phase = .failed("dots.tts is not available on this Mac.")
+            return
+        }
+        guard let refAudio = request.refAudioPath, !refAudio.isEmpty else {
+            phase = .failed("dots.tts needs a reference voice clip — record or pick one first.")
+            return
+        }
+        guard request.refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            phase = .failed("dots.tts voice cloning needs the words spoken in the reference clip.")
+            return
+        }
+        task?.cancel()
+        phase = .running(step: 0, total: 0, message: "Loading dots.tts…")
+        log = []
+        let outputPath = Self.makeOutputPath(text: request.text)
+        task = Task {
+            do {
+                try await DotsTTSBridge.synthesize(
+                    modelPath: modelDir, text: request.text, refAudioPath: refAudio,
+                    refText: request.refText, speed: request.speed, temperature: request.temperature,
+                    outputPath: outputPath,
+                    onProgress: { step, total, stage in
+                        let message = Self.bridgeProgressMessage(step: step, total: total, stage: stage)
+                        DispatchQueue.main.async {
+                            if case .running = self.phase {
+                                self.phase = .running(step: step, total: total, message: message)
+                            }
+                        }
+                    })
+                if Task.isCancelled { phase = .idle; return }
+                try? Self.settingsText(request, modelName: request.model.name)
+                    .write(to: URL(fileURLWithPath: Self.sidecarPath(forWav: outputPath)),
+                           atomically: true, encoding: .utf8)
+                phase = .completed(path: outputPath)
+                insertRecent(outputPath)
+            } catch is CancellationError {
+                phase = .idle
+            } catch {
+                phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
     /// Bridge progress → the same "Rendering audio — ~X.Xs of audio" line the
-    /// native speech path shows. The bridge counts 1920-sample frames at 24 kHz
-    /// precisely so this conversion matches the engine's talker-frame step.
-    private static func breezeProgressMessage(step: Int, total: Int, stage: String) -> String {
+    /// native speech path shows. The bridges count 1920-sample frames at 24 kHz
+    /// precisely so this conversion matches the engine's talker-frame step;
+    /// IndexTTS reports exact segment counts against the same envelope.
+    private static func bridgeProgressMessage(step: Int, total: Int, stage: String) -> String {
         let secs = Double(step) * 1920.0 / 24000.0
         return total == 0 && step > 0
             ? String(format: "%@ — ~%.1fs of audio", MediaSSE.stageLabel(stage), secs)

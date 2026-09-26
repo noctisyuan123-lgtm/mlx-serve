@@ -146,6 +146,51 @@ extension MediaBundle {
         )
     }
 
+    /// IndexTTS 2.5's MLX conversion is top-level and flat: one weights file
+    /// per component (gpt/codec/s2mel/bigvgan/w2v-bert) plus the tiktoken
+    /// vocab and the emotion pickles the runtime reads at load.
+    static func indexTTS25(repo: String, displayName: String, sizeGB: Double) -> MediaBundle {
+        MediaBundle(
+            id: "indextts25:\(repo)",
+            displayName: displayName,
+            components: [
+                MediaComponent(
+                    repo: repo,
+                    selection: FileSelection(recursive: false),
+                    readyMarkers: [
+                        "config.yaml", "config.json", "model.safetensors",
+                        "gpt.safetensors", "codec.safetensors", "s2mel.safetensors",
+                        "bigvgan.safetensors", "multilingual_zh_ja_yue_char_del.tiktoken",
+                        "feat1.pt", "feat2.pt", "wav2vec2bert_stats.pt",
+                    ]
+                ),
+            ],
+            sizeEstimateGB: sizeGB
+        )
+    }
+
+    /// dots.tts's converted weights are top-level and flat: core (the
+    /// quantized LLM trunk + DiT), speaker encoder, vocoder, latent stats and
+    /// the tokenizer directory the runtime reads at load.
+    static func dotsTTS(repo: String, displayName: String, sizeGB: Double) -> MediaBundle {
+        MediaBundle(
+            id: "dots-tts:\(repo)",
+            displayName: displayName,
+            components: [
+                MediaComponent(
+                    repo: repo,
+                    selection: FileSelection(recursive: true),
+                    readyMarkers: [
+                        "config.json", "llm_config.json", "core.safetensors",
+                        "speaker.safetensors", "vocoder.safetensors", "latent_stats.npz",
+                        "tokenizer",
+                    ]
+                ),
+            ],
+            sizeEstimateGB: sizeGB
+        )
+    }
+
     /// Breeze's BF16 checkpoint is sharded and keeps its codec under
     /// `audio_tokenizer/`, so all three weight files must be present.
     static func breezeTTSBF16(repo: String, displayName: String, sizeGB: Double) -> MediaBundle {
@@ -538,6 +583,12 @@ extension AudioModelPreset {
     var bundle: MediaBundle {
         if isBreezeTTS {
             return .breezeTTSBF16(repo: repo, displayName: name, sizeGB: approxDownloadGB)
+        }
+        if isIndexTTS {
+            return .indexTTS25(repo: repo, displayName: name, sizeGB: approxDownloadGB)
+        }
+        if isDotsTTS {
+            return .dotsTTS(repo: repo, displayName: name, sizeGB: approxDownloadGB)
         }
         return supportsCloning
             ? .tts(repo: repo, displayName: name, sizeGB: approxDownloadGB)

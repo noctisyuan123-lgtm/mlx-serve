@@ -397,18 +397,24 @@ struct VoiceGenView: View {
                 }
             }
 
-            if refAudioURL != nil {
+            // IndexTTS conditions on the reference mel alone — no transcript,
+            // and no generation at all without a clip.
+            if refAudioURL != nil && !model.isIndexTTS {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(model.isBreezeTTS ? "Transcript of reference (required for Breeze)" : "Transcript of reference (optional)")
+                    Text(model.isBreezeTTS ? "Transcript of reference (required for Breeze)"
+                         : model.isDotsTTS ? "Transcript of reference (required for dots.tts)"
+                         : "Transcript of reference (optional)")
                         .font(.caption)
                     TextField("", text: $refText,
                               prompt: Text(model.isBreezeTTS
+                                           ? "Enter the words spoken in the reference clip"
+                                           : model.isDotsTTS
                                            ? "Enter the words spoken in the reference clip"
                                            : "Optional — the reference audio alone clones the voice"))
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
                 }
-            } else {
+            } else if !model.isIndexTTS {
                 Text(L10n.format("Pick, record or drag in ~%lld seconds of the voice to clone. Without a reference, the model's default voice is used.",
                                  Int64(model.recommendedRefSeconds)))
                     .font(.caption2).foregroundStyle(.secondary)
@@ -445,18 +451,24 @@ struct VoiceGenView: View {
                     .buttonStyle(.plain).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.isBreezeTTS ? "Speed (fixed at 1x for Breeze)" : "Speed (\(String(format: "%.2fx", speed)))")
+                Text(model.isBreezeTTS ? "Speed (fixed at 1x for Breeze)"
+                     : model.isDotsTTS ? "Speed (fixed at 1x for dots.tts)"
+                     : "Speed (\(String(format: "%.2fx", speed)))")
                     .font(.caption)
                 Slider(value: $speed, in: 0.5...2.0, step: 0.05)
-                    .disabled(model.isBreezeTTS)
+                    .disabled(model.isBreezeTTS || model.isDotsTTS)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Temperature (\(String(format: "%.2f", temperature)))").font(.caption)
                 Slider(value: $temperature, in: 0.1...1.5, step: 0.05)
                 Text("Higher = more expressive and varied.").font(.caption2).foregroundStyle(.secondary)
             }
-            if model.isBreezeTTS {
-                Text("Breeze loads from the local MLX environment for each generation.")
+            if model.isBreezeTTS || model.isIndexTTS || model.isDotsTTS {
+                Text(model.isBreezeTTS
+                     ? "Breeze loads from the local MLX environment for each generation."
+                     : model.isIndexTTS
+                     ? "IndexTTS 2.5 loads from its local MLX environment for each generation."
+                     : "dots.tts loads from its local MLX environment for each generation.")
                     .font(.caption2).foregroundStyle(.secondary)
             } else {
                 Toggle("Keep model loaded after generating", isOn: $keepResident)
@@ -483,7 +495,9 @@ struct VoiceGenView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: [.command])
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (lanModel == nil && !downloads.bundleReady(model.bundle)))
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                              || (lanModel == nil && !downloads.bundleReady(model.bundle))
+                              || ((model.isIndexTTS || model.isDotsTTS) && refAudioURL == nil))
                 }
             }
         }
@@ -665,13 +679,23 @@ struct VoiceGenView: View {
             refError = "Breeze voice cloning needs the words spoken in the reference clip."
             return
         }
+        if model.isDotsTTS {
+            guard refAudioURL != nil else {
+                refError = "dots.tts needs a reference voice clip — record or choose one first."
+                return
+            }
+            guard refText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+                refError = "dots.tts voice cloning needs the words spoken in the reference clip."
+                return
+            }
+        }
         refError = nil
         let req = AudioGenRequest(
             model: model,
             text: text,
             refAudioPath: refAudioURL?.path,
             refText: refText,
-            speed: model.isBreezeTTS ? 1.0 : speed,
+            speed: (model.isBreezeTTS || model.isDotsTTS) ? 1.0 : speed,
             temperature: temperature,
             keepResident: keepResident,
             lanModelId: lanModel

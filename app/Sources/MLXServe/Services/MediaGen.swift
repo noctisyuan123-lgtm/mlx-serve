@@ -1183,6 +1183,8 @@ struct AudioModelPreset: Identifiable, Hashable {
     var builtInVoices: [String] = []
 
     var isBreezeTTS: Bool { id == Self.breezeTTS2BF16.id }
+    var isIndexTTS: Bool { id == Self.indexTTS25.id }
+    var isDotsTTS: Bool { id == Self.dotsTTS.id }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
@@ -1195,6 +1197,38 @@ struct AudioModelPreset: Identifiable, Hashable {
         approxRAMGB: 12,
         recommendedRefSeconds: 8,
         description: "Full-precision Breeze-TTS 2. Multilingual voice cloning that stays stable on both short and long text. Reference cloning requires a matching transcript."
+    )
+
+    /// IndexTTS 2.5 fp16 — runs through the IndexTTSBridge into the separate
+    /// mlx-indextts2 runtime (mlx-audio has no IndexTTS 2.x implementation).
+    /// Zero-shot cloning conditions on the reference mel alone, so no
+    /// transcript; speed is real (WSOLA time-stretch), not a model knob.
+    static let indexTTS25 = AudioModelPreset(
+        id: "mlx-community/IndexTTS-2.5-fp16",
+        name: "IndexTTS 2.5 (multilingual voice cloning, ~4.5 GB)",
+        repo: "mlx-community/IndexTTS-2.5-fp16",
+        approxDownloadGB: 4.5,
+        approxRAMGB: 8,
+        recommendedRefSeconds: 8,
+        description: "Zero-shot voice cloning with emotion control across Chinese, English, Japanese, Spanish and Arabic. Requires a reference clip — no transcript needed."
+    )
+
+    /// dots.tts mf-int8 — runs through the DotsTTSBridge into the
+    /// dots-tts-mlx runtime (a pure-MLX port; no PyTorch in the inference
+    /// path).  MeanFlow decoder (NFE=4, no CFG) — the ~2× faster variant of
+    /// the two the port supports, selected purely by which weights load.
+    /// In-context cloning needs the reference clip AND its transcript; the
+    /// runtime takes an explicit language code, which the bridge guesses
+    /// from the script.  Speed stays at 1x (the runtime's time-stretch
+    /// shells out to ffmpeg).
+    static let dotsTTS = AudioModelPreset(
+        id: "mlx-community/dots.tts-mf-mlx-int8",
+        name: "dots.tts MF (multilingual voice cloning, ~3.3 GB)",
+        repo: "mlx-community/dots.tts-mf-mlx-int8",
+        approxDownloadGB: 3.3,
+        approxRAMGB: 6,
+        recommendedRefSeconds: 8,
+        description: "Fast MeanFlow dots.tts — zero-shot cloning in 24 languages at 48 kHz. Requires a reference clip and its transcript."
     )
 
     /// Qwen3-TTS 0.6B (Base) 8-bit — the lightest supported model. Default.
@@ -1290,7 +1324,7 @@ struct AudioModelPreset: Identifiable, Hashable {
     /// AudioGenService's `ref_audio` both assume it, and Kokoro answers
     /// `ref_audio` with a named 400. Keeping Kokoro out makes that impossible
     /// BY CONSTRUCTION rather than by list ordering.
-    static let all: [AudioModelPreset] = [.qwen3TTS06B8bit, .breezeTTS2BF16, .qwen3TTS06B, .qwen3TTS17B8bit, .qwen3TTS17B]
+    static let all: [AudioModelPreset] = [.qwen3TTS06B8bit, .breezeTTS2BF16, .indexTTS25, .dotsTTS, .qwen3TTS06B, .qwen3TTS17B8bit, .qwen3TTS17B]
 
     /// Every audio preset including voice-mode-only backends — for the model
     /// browser and the catalogue guards, never for a media pane's picker.
