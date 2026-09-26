@@ -118,6 +118,10 @@ def synthesize(request: dict) -> None:
     finally:
         temp_path.unlink(missing_ok=True)
     emit({"type": "complete"})
+    # The WAV is on disk — exit hard instead of letting the MLX/torch teardown
+    # of a multi-GB model hold the process open (the Swift caller waits on
+    # waitUntilExit, and a slow interpreter shutdown reads as a hung meter).
+    os._exit(0)
 
 
 if __name__ == "__main__":
