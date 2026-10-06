@@ -494,13 +494,17 @@ final class MediaBundleTests: XCTestCase {
         XCTAssertEqual(b.primaryRepo, "ddalcu/Kokoro-82M-MLX-Serve")
     }
 
-    /// Class guard: the `.audio` slot hosts two architectures with different
-    /// repo shapes, and `supportsCloning` is the discriminator. A third audio
-    /// backend must not silently inherit the wrong bundle.
+    /// Audio backends have different codec/phonemizer layouts. Cloning
+    /// support alone does not distinguish Breeze's codec from Qwen's.
     func testAudioBundleDispatchFollowsTheDeclaredCapability() {
         for p in AudioModelPreset.allIncludingVoiceOnly {
             let m = p.bundle.components[0].readyMarkers
-            if p.supportsCloning {
+            if p.isBreezeTTS {
+                XCTAssertTrue(m.contains("audio_tokenizer/model.safetensors"),
+                              "\(p.id) needs its audio codec weights")
+                XCTAssertFalse(m.contains("speech_tokenizer"),
+                               "Breeze's checkpoint has audio_tokenizer, not Qwen's speech_tokenizer")
+            } else if p.supportsCloning {
                 XCTAssertTrue(m.contains("speech_tokenizer"), "\(p.id) clones — it needs the codec tokenizer")
             } else {
                 XCTAssertTrue(m.contains("g2p"), "\(p.id) can't clone — it needs the phonemizer dictionaries")
