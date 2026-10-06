@@ -1066,6 +1066,10 @@ class DownloadManager: ObservableObject {
     /// static so it's unit-testable against a temp dir.
     nonisolated static func componentReady(_ comp: MediaComponent, modelsRoot: String) -> Bool {
         guard let dir = existingModelDir(rootDir: modelsRoot, repoId: comp.repo) else { return false }
+        // An explicitly configured speech adapter has no native weights.
+        if comp.readyMarkers.contains("speech_tokenizer"), ExternalSpeechProvider.read(directory: dir) != nil {
+            return true
+        }
         let fm = FileManager.default
         for marker in comp.readyMarkers {
             guard fm.fileExists(atPath: (dir as NSString).appendingPathComponent(marker)) else { return false }

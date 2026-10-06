@@ -76,8 +76,8 @@ final class AudioGenService: ObservableObject {
                 if !keep, let id = loadedId { try? await server.unloadModel(id: id) }
             }
             do {
-                let (port, modelId, unloadId) = try await server.prepareGenModel(
-                    lanModelId: request.lanModelId, repo: request.model.repo)
+                let (port, modelId, unloadId, speechPath) = try await ExternalSpeechProvider.prepare(
+                    repo: request.model.repo, lanModelId: request.lanModelId, server: server)
                 loadedId = unloadId
                 if Task.isCancelled { await releaseIfNeeded(); phase = .idle; return }
                 // SSE: audio length is model-determined, so `progress` events carry
@@ -86,8 +86,13 @@ final class AudioGenService: ObservableObject {
                 var wav: Data? = nil
                 var reqJson: [String: Any] = ["model": modelId, "input": text]
                 if let refB64 { reqJson["ref_audio"] = refB64 }
+                if speechPath != "/v1/audio/speech" {
+                    reqJson["ref_text"] = request.refText
+                    reqJson["speed"] = request.speed
+                    reqJson["temperature"] = request.temperature
+                }
                 for try await ev in api.streamGeneration(
-                    port: port, path: "/v1/audio/speech",
+                    port: port, path: speechPath,
                     json: reqJson) {
                     switch ev["type"] as? String {
                     case "progress":
@@ -96,7 +101,7 @@ final class AudioGenService: ObservableObject {
                         let stage = ev["stage"] as? String ?? "Generating audio"
                         // ~0.08s of audio per talker frame (1920 samples @ 24 kHz).
                         let secs = Double(step) * 1920.0 / 24000.0
-                        let msg = total == 0 && step > 0
+                        let msg = speechPath != "/v1/audio/speech" ? SpeechProgress.message(ev) : total == 0 && step > 0
                             ? String(format: "%@ — ~%.1fs", stage, secs) : "\(stage)…"
                         phase = .running(step: step, total: total, message: msg)
                     case "complete":
@@ -180,8 +185,8 @@ final class AudioGenService: ObservableObject {
         }
         report(0, 0, "Loading model")
 
-        let (port, modelId, unloadId) = try await server.prepareGenModel(
-            lanModelId: request.lanModelId, repo: request.model.repo)
+        let (port, modelId, unloadId, speechPath) = try await ExternalSpeechProvider.prepare(
+            repo: request.model.repo, lanModelId: request.lanModelId, server: server)
         func releaseIfNeeded() async {
             if !keep, let id = unloadId { try? await server.unloadModel(id: id) }
         }
@@ -193,15 +198,19 @@ final class AudioGenService: ObservableObject {
                let data = try? Data(contentsOf: URL(fileURLWithPath: ref)) {
                 reqJson["ref_audio"] = data.base64EncodedString()
             }
+            if speechPath != "/v1/audio/speech" {
+                reqJson["ref_text"] = request.refText
+                reqJson["temperature"] = request.temperature
+            }
             for try await ev in api.streamGeneration(
-                port: port, path: "/v1/audio/speech", json: reqJson) {
+                port: port, path: speechPath, json: reqJson) {
                 switch MediaSSE.classify(ev) {
                 case .progress(let step, let total, let stage):
                     // Speech length is model-determined: total is 0 and the step
                     // is a talker frame (~0.08s of audio at 1920 samples/24 kHz),
                     // so the seconds produced is the only honest number here.
                     let secs = Double(step) * 1920.0 / 24000.0
-                    let msg = total == 0 && step > 0
+                    let msg = speechPath != "/v1/audio/speech" ? SpeechProgress.message(ev) : total == 0 && step > 0
                         ? String(format: "%@ — ~%.1fs of audio", MediaSSE.stageLabel(stage), secs)
                         : MediaSSE.stageLabel(stage)
                     report(step, total, msg)
